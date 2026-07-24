@@ -58,4 +58,10 @@ public sealed class WorkerOptions
     /// <summary>Timeout applied to individual Playwright navigation and locator waits.</summary>
     [Range(typeof(TimeSpan), "00:00:05", "00:05:00")]
     public TimeSpan NavigationTimeout { get; init; } = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// When true, the worker performs a single check and then exits instead of looping. Used for
+    /// scheduled/one-shot hosting (e.g. GitHub Actions cron) where the platform provides the schedule.
+    /// </summary>
+    public bool RunOnce { get; init; } = false;
 }

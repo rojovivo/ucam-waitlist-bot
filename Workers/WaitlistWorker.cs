@@ -13,6 +13,7 @@ public sealed class WaitlistWorker : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly WorkerOptions _options;
+    private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<WaitlistWorker> _logger;
 
     // Set to false after the first successful check, so the optional startup ping fires only once.
@@ -21,20 +22,36 @@ public sealed class WaitlistWorker : BackgroundService
     public WaitlistWorker(
         IServiceScopeFactory scopeFactory,
         IOptions<WorkerOptions> options,
+        IHostApplicationLifetime lifetime,
         ILogger<WaitlistWorker> logger)
     {
         _scopeFactory = scopeFactory;
         _options = options.Value;
+        _lifetime = lifetime;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "Waitlist worker started. Interval {Interval}, active window {Start}-{End} (local), max jitter {Jitter}.",
-            _options.PollInterval, _options.ActiveHoursStart, _options.ActiveHoursEnd, _options.MaxJitter);
+            "Waitlist worker started. RunOnce {RunOnce}, interval {Interval}, active window {Start}-{End} (local), max jitter {Jitter}.",
+            _options.RunOnce, _options.PollInterval, _options.ActiveHoursStart, _options.ActiveHoursEnd, _options.MaxJitter);
 
-        // Run once immediately, then on every timer tick.
+        // One-shot mode (e.g. GitHub Actions cron): a single check, then exit.
+        if (_options.RunOnce)
+        {
+            var succeeded = await RunCheckWithJitterAsync(stoppingToken).ConfigureAwait(false);
+            if (!succeeded)
+            {
+                // Surface failure to the host process so a scheduled run is flagged as failed.
+                Environment.ExitCode = 1;
+            }
+
+            _lifetime.StopApplication();
+            return;
+        }
+
+        // Continuous mode: run once immediately, then on every timer tick.
         using var timer = new PeriodicTimer(_options.PollInterval);
         do
         {
@@ -47,26 +64,29 @@ public sealed class WaitlistWorker : BackgroundService
     private bool IsWithinActiveHours(TimeSpan timeOfDay) =>
         timeOfDay >= _options.ActiveHoursStart && timeOfDay <= _options.ActiveHoursEnd;
 
-    private async Task RunCheckWithJitterAsync(CancellationToken stoppingToken)
+    /// <summary>Runs one check. Returns true on success or an intentional skip, false on failure.</summary>
+    private async Task<bool> RunCheckWithJitterAsync(CancellationToken stoppingToken)
     {
         try
         {
-            // Skip ticks that fall outside the daily active window (e.g. overnight).
+            // Skip ticks that fall outside the daily active window (e.g. overnight). Not a failure.
             var now = DateTime.Now;
             if (!IsWithinActiveHours(now.TimeOfDay))
             {
                 _logger.LogInformation(
                     "Outside active window {Start}-{End}; skipping check at {Now:t}.",
                     _options.ActiveHoursStart, _options.ActiveHoursEnd, now);
-                return;
+                return true;
             }
 
             await ApplyJitterAsync(stoppingToken).ConfigureAwait(false);
             await RunCheckAsync(stoppingToken).ConfigureAwait(false);
+            return true;
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Graceful shutdown; nothing to report.
+            return true;
         }
         catch (Exception ex)
         {
@@ -74,6 +94,7 @@ public sealed class WaitlistWorker : BackgroundService
             // stop the loop: alert via Telegram and continue.
             _logger.LogError(ex, "Waitlist check failed.");
             await NotifyFailureAsync(ex, stoppingToken).ConfigureAwait(false);
+            return false;
         }
     }
 

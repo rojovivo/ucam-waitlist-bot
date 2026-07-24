@@ -1,0 +1,71 @@
+name: Check UCAM waitlist
+
+on:
+  schedule:
+    # Hourly. Cron is UTC; combined with TZ=Europe/Madrid and the in-app active-hours gate
+    # (08:00-20:00) this yields 08:00-20:00 Madrid year-round, DST handled by the app.
+    - cron: '0 6-19 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: ucam-waitlist
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Europe/Madrid
+      # Secrets -> configuration (double underscore = section separator)
+      Portal__Username: ${{ secrets.PORTAL_USERNAME }}
+      Portal__Password: ${{ secrets.PORTAL_PASSWORD }}
+      Telegram__BotToken: ${{ secrets.TELEGRAM_BOTTOKEN }}
+      Telegram__ChatId: ${{ secrets.TELEGRAM_CHATID }}
+      # One-shot behaviour for a scheduled runner
+      Worker__RunOnce: 'true'
+      Worker__NotifyOnStartup: 'false'
+      Worker__MaxJitter: '00:00:00'
+      Worker__StateFilePath: 'data/last-position.json'
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet and Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            ~/.cache/ms-playwright
+          key: deps-${{ runner.os }}-${{ hashFiles('**/UcamWaitlistBot.csproj') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
+
+      - name: Build
+        run: dotnet build -c Release
+
+      - name: Install Chromium
+        run: pwsh bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+
+      - name: Run one check
+        run: dotnet bin/Release/net10.0/UcamWaitlistBot.dll
+
+      - name: Persist state
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain data/last-position.json)" ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/last-position.json
+            git commit -m "chore: update waitlist state [skip ci]"
+            git push
+          else
+            echo "No state change."
+          fi
