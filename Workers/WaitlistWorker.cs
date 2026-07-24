@@ -1,0 +1,150 @@
+using Microsoft.Extensions.Options;
+using UcamWaitlistBot.Configuration;
+using UcamWaitlistBot.Models;
+using UcamWaitlistBot.Services;
+
+namespace UcamWaitlistBot.Workers;
+
+/// <summary>
+/// Background service that checks the waitlist position on a periodic schedule (with jitter),
+/// notifying via Telegram whenever the position changes or on the first run.
+/// </summary>
+public sealed class WaitlistWorker : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly WorkerOptions _options;
+    private readonly ILogger<WaitlistWorker> _logger;
+
+    // Set to false after the first successful check, so the optional startup ping fires only once.
+    private bool _isFirstCheck = true;
+
+    public WaitlistWorker(
+        IServiceScopeFactory scopeFactory,
+        IOptions<WorkerOptions> options,
+        ILogger<WaitlistWorker> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _options = options.Value;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation(
+            "Waitlist worker started. Interval {Interval}, active window {Start}-{End} (local), max jitter {Jitter}.",
+            _options.PollInterval, _options.ActiveHoursStart, _options.ActiveHoursEnd, _options.MaxJitter);
+
+        // Run once immediately, then on every timer tick.
+        using var timer = new PeriodicTimer(_options.PollInterval);
+        do
+        {
+            await RunCheckWithJitterAsync(stoppingToken).ConfigureAwait(false);
+        }
+        while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false));
+    }
+
+    /// <summary>True if the given local time-of-day falls within the configured active window (inclusive).</summary>
+    private bool IsWithinActiveHours(TimeSpan timeOfDay) =>
+        timeOfDay >= _options.ActiveHoursStart && timeOfDay <= _options.ActiveHoursEnd;
+
+    private async Task RunCheckWithJitterAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            // Skip ticks that fall outside the daily active window (e.g. overnight).
+            var now = DateTime.Now;
+            if (!IsWithinActiveHours(now.TimeOfDay))
+            {
+                _logger.LogInformation(
+                    "Outside active window {Start}-{End}; skipping check at {Now:t}.",
+                    _options.ActiveHoursStart, _options.ActiveHoursEnd, now);
+                return;
+            }
+
+            await ApplyJitterAsync(stoppingToken).ConfigureAwait(false);
+            await RunCheckAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Graceful shutdown; nothing to report.
+        }
+        catch (Exception ex)
+        {
+            // A failed check (broken login/selector, timeout after retries, parse failure) must not
+            // stop the loop: alert via Telegram and continue.
+            _logger.LogError(ex, "Waitlist check failed.");
+            await NotifyFailureAsync(ex, stoppingToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ApplyJitterAsync(CancellationToken stoppingToken)
+    {
+        if (_options.MaxJitter <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        // Random.Shared is thread-safe; the worker runs single-threaded but this is future-proof.
+        var jitter = TimeSpan.FromMilliseconds(Random.Shared.NextDouble() * _options.MaxJitter.TotalMilliseconds);
+        _logger.LogDebug("Applying jitter of {Jitter} before check.", jitter);
+        await Task.Delay(jitter, stoppingToken).ConfigureAwait(false);
+    }
+
+    private async Task RunCheckAsync(CancellationToken stoppingToken)
+    {
+        // Resolve per-run (scoped) dependencies from a dedicated scope.
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var scraper = scope.ServiceProvider.GetRequiredService<IUcamScraperService>();
+        var store = scope.ServiceProvider.GetRequiredService<IPositionStore>();
+        var notifier = scope.ServiceProvider.GetRequiredService<ITelegramNotifier>();
+
+        var result = await scraper.GetWaitlistPositionAsync(stoppingToken).ConfigureAwait(false);
+        var state = await store.GetStateAsync(stoppingToken).ConfigureAwait(false);
+
+        var previous = state.Position;
+        var today = DateOnly.FromDateTime(DateTime.Now); // local, matches the active-hours window
+        var isFirstRun = previous is null;
+        var changed = !isFirstRun && previous!.Value != result.Position;
+
+        // Once-per-process startup ping: confirms Telegram works even when the position is unchanged.
+        var startupPing = _options.NotifyOnStartup && _isFirstCheck;
+        _isFirstCheck = false;
+
+        // Once-per-day "good morning" message on the first in-window check of a new calendar day.
+        var dailyDue = _options.SendDailyMorningMessage && state.LastDailyMessageDateLocal != today;
+
+        if (isFirstRun || changed || startupPing || dailyDue)
+        {
+            _logger.LogInformation(
+                "Reporting position: {Previous} -> {Current} (firstRun: {FirstRun}, changed: {Changed}, startupPing: {StartupPing}, dailyDue: {DailyDue}).",
+                previous?.ToString() ?? "(none)", result.Position, isFirstRun, changed, startupPing, dailyDue);
+
+            // Use the "current position" wording unless the position actually changed.
+            await notifier.NotifyPositionAsync(result.ProgramName, result.Position, isFirstRun: !changed, stoppingToken)
+                .ConfigureAwait(false);
+
+            // Stamp today's date so the daily message fires only once per calendar day.
+            await store.SaveStateAsync(new WaitlistState(result.Position, today), stoppingToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            _logger.LogInformation("Position unchanged at {Position}; no notification sent.", result.Position);
+        }
+    }
+
+    private async Task NotifyFailureAsync(Exception ex, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var notifier = scope.ServiceProvider.GetRequiredService<ITelegramNotifier>();
+            await notifier.NotifyErrorAsync(ex.Message, stoppingToken).ConfigureAwait(false);
+        }
+        catch (Exception notifyEx)
+        {
+            // If even the notification fails, log and carry on; the next tick will try again.
+            _logger.LogError(notifyEx, "Failed to send error notification.");
+        }
+    }
+}

@@ -1,0 +1,60 @@
+# ---- Project-specific (keep these) ----
+# Local secrets / developer overrides — never commit credentials
+appsettings.Development.json
+appsettings.*.local.json
+secrets.json
+*.secrets.json
+
+# Local runtime state (persisted waitlist position + daily-message date)
+state/
+
+# Playwright browsers if ever placed inside the repo
+.playwright/
+ms-playwright/
+
+# ---- .NET build output ----
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.dll
+*.exe
+*.pdb
+
+# ---- Publish output ----
+publish/
+[Pp]ublish/
+*.pubxml
+*.pubxml.user
+
+# ---- NuGet ----
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+project.lock.json
+project.assets.json
+
+# ---- Test results ----
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coverxml
+coverage*.json
+coverage*.xml
+
+# ---- IDE / editor ----
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.rsuser
+
+# ---- OS ----
+Thumbs.db
+Desktop.ini
+.DS_Store
