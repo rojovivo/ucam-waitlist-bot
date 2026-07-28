@@ -2,9 +2,11 @@ name: Check UCAM waitlist
 
 on:
   schedule:
-    # Hourly. Cron is UTC; combined with TZ=Europe/Madrid and the in-app active-hours gate
-    # (08:00-20:00) this yields 08:00-20:00 Madrid year-round, DST handled by the app.
-    - cron: '0 6-19 * * *'
+    # Hourly, weekdays only. Cron is UTC; combined with TZ=Europe/Madrid and the in-app
+    # active-hours gate (08:00-20:00) this yields 08:00-20:00 Madrid, Mon-Fri, DST handled by
+    # the app. The scheduled UTC hours (06-19) never cross midnight Madrid, so UTC weekday
+    # equals Madrid weekday and '1-5' is correct year-round.
+    - cron: '0 6-19 * * 1-5'
   workflow_dispatch: {}
 
 concurrency:
