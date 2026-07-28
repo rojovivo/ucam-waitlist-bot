@@ -26,19 +26,14 @@ public sealed class TelegramNotifier : ITelegramNotifier
 
     public async Task NotifyPositionAsync(string programName, int position, bool isFirstRun, CancellationToken cancellationToken)
     {
-        var headline = isFirstRun ? "📋 Current waitlist position" : "🔔 Waitlist position changed";
-        var text =
-            $"{headline}\n" +
-            $"*{Escape(programName)}*\n" +
-            $"POSICIÓN DE ESPERA: *{position}*";
-
+        var text = TelegramMessageFormatter.BuildPositionMessage(programName, position, isFirstRun);
         await SendAsync(text, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("Sent position notification: {Program} -> {Position}.", programName, position);
     }
 
     public async Task NotifyErrorAsync(string message, CancellationToken cancellationToken)
     {
-        var text = $"⚠️ *UCAM waitlist bot check failed*\n{Escape(message)}";
+        var text = TelegramMessageFormatter.BuildErrorMessage(message);
         await SendAsync(text, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("Sent error notification to chat {ChatId}.", _chatId);
     }
@@ -49,11 +44,4 @@ public sealed class TelegramNotifier : ITelegramNotifier
             text: text,
             parseMode: ParseMode.Markdown,
             cancellationToken: cancellationToken);
-
-    /// <summary>Escapes the characters that are significant in Telegram's (legacy) Markdown mode.</summary>
-    private static string Escape(string value) =>
-        value.Replace("_", "\\_")
-             .Replace("*", "\\*")
-             .Replace("[", "\\[")
-             .Replace("`", "\\`");
 }

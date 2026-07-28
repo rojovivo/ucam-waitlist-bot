@@ -122,26 +122,20 @@ public sealed class WaitlistWorker : BackgroundService
         var result = await scraper.GetWaitlistPositionAsync(stoppingToken).ConfigureAwait(false);
         var state = await store.GetStateAsync(stoppingToken).ConfigureAwait(false);
 
-        var previous = state.Position;
         var today = DateOnly.FromDateTime(DateTime.Now); // local, matches the active-hours window
-        var isFirstRun = previous is null;
-        var changed = !isFirstRun && previous!.Value != result.Position;
-
-        // Once-per-process startup ping: confirms Telegram works even when the position is unchanged.
-        var startupPing = _options.NotifyOnStartup && _isFirstCheck;
+        var isFirstProcessCheck = _isFirstCheck;
         _isFirstCheck = false;
 
-        // Once-per-day "good morning" message on the first in-window check of a new calendar day.
-        var dailyDue = _options.SendDailyMorningMessage && state.LastDailyMessageDateLocal != today;
+        var decision = ReportDecider.Decide(state, result.Position, isFirstProcessCheck, today, _options);
 
-        if (isFirstRun || changed || startupPing || dailyDue)
+        if (decision.ShouldReport)
         {
             _logger.LogInformation(
-                "Reporting position: {Previous} -> {Current} (firstRun: {FirstRun}, changed: {Changed}, startupPing: {StartupPing}, dailyDue: {DailyDue}).",
-                previous?.ToString() ?? "(none)", result.Position, isFirstRun, changed, startupPing, dailyDue);
+                "Reporting position: {Previous} -> {Current} (asChange: {AsChange}).",
+                state.Position?.ToString() ?? "(none)", result.Position, decision.ReportAsChange);
 
             // Use the "current position" wording unless the position actually changed.
-            await notifier.NotifyPositionAsync(result.ProgramName, result.Position, isFirstRun: !changed, stoppingToken)
+            await notifier.NotifyPositionAsync(result.ProgramName, result.Position, isFirstRun: !decision.ReportAsChange, stoppingToken)
                 .ConfigureAwait(false);
 
             // Stamp today's date so the daily message fires only once per calendar day.
