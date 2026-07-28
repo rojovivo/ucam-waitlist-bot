@@ -9,6 +9,8 @@
     <!-- Required so the Playwright install script is copied next to the build output. -->
     <UserSecretsId>ucam-waitlist-bot</UserSecretsId>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The test project lives under tests/; keep it out of the app's default source globs. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
