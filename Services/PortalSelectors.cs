@@ -37,4 +37,7 @@ public static class PortalSelectors
     // Header text is mixed-case in the DOM ("Posición de espera") and uppercased via CSS, so we
     // match it with a case-insensitive regex. "." tolerates the accented "ó".
     public const string WaitlistHeaderPattern = "posici.n de espera";
+
+    // The "Estado" column (e.g. "En espera") — the signal that changes on admission.
+    public const string EstadoHeaderPattern = "estado";
 }

@@ -59,10 +59,12 @@ public sealed class UcamScraperService : IUcamScraperService
         await LoginAsync(page, cancellationToken).ConfigureAwait(false);
         await OpenProgramAsync(page, cancellationToken).ConfigureAwait(false);
         await NavigateToResultStepAsync(page, cancellationToken).ConfigureAwait(false);
-        var position = await ReadWaitlistPositionAsync(page, cancellationToken).ConfigureAwait(false);
+        var (estado, position) = await ReadResultAsync(page, cancellationToken).ConfigureAwait(false);
 
-        _logger.LogInformation("Read waitlist position {Position} for '{Program}'.", position, _portal.ProgramName);
-        return new WaitlistResult(_portal.ProgramName, position, DateTimeOffset.UtcNow);
+        _logger.LogInformation(
+            "Read result for '{Program}': estado '{Estado}', position {Position}.",
+            _portal.ProgramName, estado, position?.ToString() ?? "(none)");
+        return new WaitlistResult(_portal.ProgramName, estado, position, DateTimeOffset.UtcNow);
     }
 
     private async Task LoginAsync(IPage page, CancellationToken cancellationToken)
@@ -118,49 +120,51 @@ public sealed class UcamScraperService : IUcamScraperService
         await page.GetByText(PortalSelectors.ResultStepText).First.ClickAsync().ConfigureAwait(false);
     }
 
-    private async Task<int> ReadWaitlistPositionAsync(IPage page, CancellationToken cancellationToken)
+    private async Task<(string Estado, int? Position)> ReadResultAsync(IPage page, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _logger.LogDebug("Reading the waitlist position from the results grid.");
+        _logger.LogDebug("Reading estado and waitlist position from the results grid.");
 
         // The results block is two sibling LWC grids: a header row of label cells and a value row of
-        // data cells, aligned by column index. Find the index of the "Posición de espera" header,
-        // then read the value cell at the same index.
+        // data cells, aligned by column index. We locate a value by matching its column header.
         var headerCells = page.Locator(PortalSelectors.ResultHeaderCells);
         var valueCells = page.Locator(PortalSelectors.ResultValueCells);
 
         await headerCells.First.WaitForAsync().ConfigureAwait(false);
-
-        var headerRegex = new Regex(PortalSelectors.WaitlistHeaderPattern, RegexOptions.IgnoreCase);
         var headerCount = await headerCells.CountAsync().ConfigureAwait(false);
 
-        var targetIndex = -1;
-        for (var i = 0; i < headerCount; i++)
+        // Reads the value cell whose header matches the given (case-insensitive) pattern; null if the
+        // header cannot be found.
+        async Task<string?> ReadCellByHeaderAsync(string headerPattern)
         {
-            var headerText = (await headerCells.Nth(i).InnerTextAsync().ConfigureAwait(false)).Trim();
-            if (headerRegex.IsMatch(headerText))
+            var regex = new Regex(headerPattern, RegexOptions.IgnoreCase);
+            for (var i = 0; i < headerCount; i++)
             {
-                targetIndex = i;
-                break;
+                var headerText = (await headerCells.Nth(i).InnerTextAsync().ConfigureAwait(false)).Trim();
+                if (regex.IsMatch(headerText))
+                {
+                    var valueCell = valueCells.Nth(i);
+                    await valueCell.WaitForAsync().ConfigureAwait(false);
+                    return (await valueCell.InnerTextAsync().ConfigureAwait(false)).Trim();
+                }
             }
+
+            return null;
         }
 
-        if (targetIndex < 0)
+        // ESTADO must be present — if it's missing, the results layout has genuinely changed (fail loud).
+        var estado = await ReadCellByHeaderAsync(PortalSelectors.EstadoHeaderPattern).ConfigureAwait(false);
+        if (estado is null)
         {
             throw new InvalidOperationException(
-                $"Could not find a results column matching '{PortalSelectors.WaitlistHeaderPattern}'.");
+                $"Could not find a results column matching '{PortalSelectors.EstadoHeaderPattern}'.");
         }
 
-        var valueCell = valueCells.Nth(targetIndex);
-        await valueCell.WaitForAsync().ConfigureAwait(false);
-        var rawValue = (await valueCell.InnerTextAsync().ConfigureAwait(false)).Trim();
+        // Position is optional: once admission removes the waitlist number the cell may be empty,
+        // "-", or absent. Parse defensively to null rather than throwing.
+        var rawPosition = await ReadCellByHeaderAsync(PortalSelectors.WaitlistHeaderPattern).ConfigureAwait(false);
+        int? position = int.TryParse(rawPosition, out var parsed) ? parsed : null;
 
-        if (!int.TryParse(rawValue, out var position))
-        {
-            throw new InvalidOperationException(
-                $"Could not parse waitlist position from cell text '{rawValue}'.");
-        }
-
-        return position;
+        return (estado, position);
     }
 }

@@ -27,6 +27,7 @@ public sealed class JsonPositionStore : IPositionStore
     private sealed record StoredState(
         int? Position,
         DateOnly? LastDailyMessageDateLocal,
+        string? LastEstado,
         DateTimeOffset UpdatedAtUtc);
 
     public async Task<WaitlistState> GetStateAsync(CancellationToken cancellationToken)
@@ -37,7 +38,7 @@ public sealed class JsonPositionStore : IPositionStore
             if (!File.Exists(_filePath))
             {
                 _logger.LogInformation("No state file at {Path}; treating next check as first run.", _filePath);
-                return new WaitlistState(null, null);
+                return new WaitlistState(null, null, null);
             }
 
             await using var stream = File.OpenRead(_filePath);
@@ -46,14 +47,14 @@ public sealed class JsonPositionStore : IPositionStore
                 .ConfigureAwait(false);
 
             return state is null
-                ? new WaitlistState(null, null)
-                : new WaitlistState(state.Position, state.LastDailyMessageDateLocal);
+                ? new WaitlistState(null, null, null)
+                : new WaitlistState(state.Position, state.LastDailyMessageDateLocal, state.LastEstado);
         }
         catch (JsonException ex)
         {
             // A corrupt state file should not crash the bot; treat it as "no known value".
             _logger.LogWarning(ex, "State file at {Path} is unreadable; treating next check as first run.", _filePath);
-            return new WaitlistState(null, null);
+            return new WaitlistState(null, null, null);
         }
         finally
         {
@@ -72,7 +73,7 @@ public sealed class JsonPositionStore : IPositionStore
                 Directory.CreateDirectory(directory);
             }
 
-            var stored = new StoredState(state.Position, state.LastDailyMessageDateLocal, DateTimeOffset.UtcNow);
+            var stored = new StoredState(state.Position, state.LastDailyMessageDateLocal, state.LastEstado, DateTimeOffset.UtcNow);
 
             // Write to a temp file then move, so a crash mid-write cannot leave a truncated document.
             var tempPath = _filePath + ".tmp";
