@@ -2,6 +2,8 @@ using Microsoft.Extensions.Options;
 using Telegram.Bot;
 using Telegram.Bot.Types.Enums;
 using UcamWaitlistBot.Configuration;
+using UcamWaitlistBot.Models;
+using UcamWaitlistBot.Workers;
 
 namespace UcamWaitlistBot.Services;
 
@@ -24,11 +26,14 @@ public sealed class TelegramNotifier : ITelegramNotifier
         _logger = logger;
     }
 
-    public async Task NotifyPositionAsync(string programName, int position, bool isFirstRun, CancellationToken cancellationToken)
+    public async Task NotifyResultAsync(WaitlistResult result, ReportReason reason, WaitlistState previous, CancellationToken cancellationToken)
     {
-        var text = TelegramMessageFormatter.BuildPositionMessage(programName, position, isFirstRun);
+        var text = TelegramMessageFormatter.BuildMessage(
+            result.ProgramName, result.Estado, result.Position, reason, previous.LastEstado);
         await SendAsync(text, cancellationToken).ConfigureAwait(false);
-        _logger.LogInformation("Sent position notification: {Program} -> {Position}.", programName, position);
+        _logger.LogInformation(
+            "Sent notification ({Reason}): {Program} estado '{Estado}', position {Position}.",
+            reason, result.ProgramName, result.Estado, result.Position?.ToString() ?? "(none)");
     }
 
     public async Task NotifyErrorAsync(string message, CancellationToken cancellationToken)

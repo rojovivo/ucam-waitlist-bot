@@ -126,25 +126,26 @@ public sealed class WaitlistWorker : BackgroundService
         var isFirstProcessCheck = _isFirstCheck;
         _isFirstCheck = false;
 
-        var decision = ReportDecider.Decide(state, result.Position, isFirstProcessCheck, today, _options);
+        var decision = ReportDecider.Decide(state, result.Estado, result.Position, isFirstProcessCheck, today, _options);
 
         if (decision.ShouldReport)
         {
             _logger.LogInformation(
-                "Reporting position: {Previous} -> {Current} (asChange: {AsChange}).",
-                state.Position?.ToString() ?? "(none)", result.Position, decision.ReportAsChange);
+                "Reporting ({Reason}): estado '{PrevEstado}'->'{Estado}', position {PrevPos}->{Pos}.",
+                decision.Reason, state.LastEstado ?? "(none)", result.Estado,
+                state.Position?.ToString() ?? "(none)", result.Position?.ToString() ?? "(none)");
 
-            // Use the "current position" wording unless the position actually changed.
-            await notifier.NotifyPositionAsync(result.ProgramName, result.Position, isFirstRun: !decision.ReportAsChange, stoppingToken)
-                .ConfigureAwait(false);
+            await notifier.NotifyResultAsync(result, decision.Reason, state, stoppingToken).ConfigureAwait(false);
 
-            // Stamp today's date so the daily message fires only once per calendar day.
-            await store.SaveStateAsync(new WaitlistState(result.Position, today), stoppingToken)
+            // Stamp today's date (daily message once per day) and remember the latest position/estado.
+            await store.SaveStateAsync(new WaitlistState(result.Position, today, result.Estado), stoppingToken)
                 .ConfigureAwait(false);
         }
         else
         {
-            _logger.LogInformation("Position unchanged at {Position}; no notification sent.", result.Position);
+            _logger.LogInformation(
+                "No change (estado '{Estado}', position {Position}); no notification sent.",
+                result.Estado, result.Position?.ToString() ?? "(none)");
         }
     }
 

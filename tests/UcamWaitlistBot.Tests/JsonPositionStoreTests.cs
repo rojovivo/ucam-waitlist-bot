@@ -30,11 +30,12 @@ public sealed class JsonPositionStoreTests : IDisposable
         var store = CreateStore();
         var date = new DateOnly(2026, 7, 28);
 
-        await store.SaveStateAsync(new WaitlistState(16, date), CancellationToken.None);
+        await store.SaveStateAsync(new WaitlistState(16, date, "En espera"), CancellationToken.None);
         var loaded = await store.GetStateAsync(CancellationToken.None);
 
         Assert.Equal(16, loaded.Position);
         Assert.Equal(date, loaded.LastDailyMessageDateLocal);
+        Assert.Equal("En espera", loaded.LastEstado);
     }
 
     [Fact]
@@ -46,6 +47,7 @@ public sealed class JsonPositionStoreTests : IDisposable
 
         Assert.Null(loaded.Position);
         Assert.Null(loaded.LastDailyMessageDateLocal);
+        Assert.Null(loaded.LastEstado);
     }
 
     [Fact]
@@ -59,6 +61,23 @@ public sealed class JsonPositionStoreTests : IDisposable
 
         Assert.Null(loaded.Position);
         Assert.Null(loaded.LastDailyMessageDateLocal);
+        Assert.Null(loaded.LastEstado);
+    }
+
+    [Fact]
+    public async Task Legacy_file_without_estado_loads_with_null_estado()
+    {
+        // A state file written before LastEstado existed must still load (field absent -> null).
+        Directory.CreateDirectory(Path.GetDirectoryName(_file)!);
+        await File.WriteAllTextAsync(_file,
+            "{ \"Position\": 16, \"LastDailyMessageDateLocal\": \"2026-07-28\", \"UpdatedAtUtc\": \"2026-07-28T00:00:00+00:00\" }");
+        var store = CreateStore();
+
+        var loaded = await store.GetStateAsync(CancellationToken.None);
+
+        Assert.Equal(16, loaded.Position);
+        Assert.Equal(new DateOnly(2026, 7, 28), loaded.LastDailyMessageDateLocal);
+        Assert.Null(loaded.LastEstado);
     }
 
     [Fact]
@@ -66,8 +85,8 @@ public sealed class JsonPositionStoreTests : IDisposable
     {
         var store = CreateStore();
 
-        await store.SaveStateAsync(new WaitlistState(16, new DateOnly(2026, 7, 27)), CancellationToken.None);
-        await store.SaveStateAsync(new WaitlistState(14, new DateOnly(2026, 7, 28)), CancellationToken.None);
+        await store.SaveStateAsync(new WaitlistState(16, new DateOnly(2026, 7, 27), "En espera"), CancellationToken.None);
+        await store.SaveStateAsync(new WaitlistState(14, new DateOnly(2026, 7, 28), "En espera"), CancellationToken.None);
         var loaded = await store.GetStateAsync(CancellationToken.None);
 
         Assert.Equal(14, loaded.Position);
