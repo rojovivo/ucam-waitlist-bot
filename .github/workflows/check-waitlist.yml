@@ -1,19 +1,10 @@
 name: Check UCAM waitlist
 
 on:
-  schedule:
-    # Weekdays only (Mon-Fri). Cron is UTC; TZ=Europe/Madrid + the in-app active-hours gate
-    # (08:00-20:00 Madrid) keep effective checks in-window, DST handled by the app. The scheduled
-    # UTC hours never cross midnight Madrid, so UTC weekday equals Madrid weekday ('1-5' correct
-    # year-round). Off-peak minutes are used because the top of the hour is the most congested and
-    # most likely to be delayed/dropped by GitHub.
-    #
-    # Morning burst so the daily message lands ~08:00 Madrid despite GitHub cron delays/drops
-    # (06:00 UTC = 08:00 CEST summer; 07:00 UTC = 08:00 CET winter). Pre-08:00 Madrid runs skip
-    # harmlessly via the active-hours gate.
-    - cron: '8,23,38,53 6,7 * * 1-5'
-    # Roughly-hourly daytime checks at an off-peak minute.
-    - cron: '8 8-18 * * 1-5'
+  # Scheduling is external: cron-job.org calls the workflow_dispatch API on a schedule
+  # (hourly 08:00-20:00 Europe/Madrid, Mon-Fri) because GitHub's built-in cron proved
+  # unreliable (delayed/dropped runs). Kept dispatch-only so manual "Run workflow" still works.
+  # The in-app active-hours gate + TZ=Europe/Madrid remain as a safety net.
   workflow_dispatch: {}
 
 concurrency:
